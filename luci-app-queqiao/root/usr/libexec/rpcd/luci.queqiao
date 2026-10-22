@@ -5,7 +5,9 @@ status() {
 	local running=0 enabled=0 profile=0
 	/etc/init.d/queqiao running >/dev/null 2>&1 && running=1
 	/etc/init.d/queqiao enabled >/dev/null 2>&1 && enabled=1
-	[ -f /etc/queqiao/router.json ] && profile=1
+	local profile_path
+	profile_path=$(/usr/libexec/queqiao-profile active-path 2>/dev/null)
+	[ -n "$profile_path" ] && [ -f "$profile_path" ] && profile=1
 	json_init
 	json_add_boolean running "$running"
 	json_add_boolean enabled "$enabled"
@@ -16,11 +18,13 @@ status() {
 
 case "$1" in
 	list)
-		printf '%s\n' '{"status":{},"action":{"action":""},"profile_read":{},"profile_save":{"content":"","revision":""}}'
+		printf '%s\n' '{"status":{},"action":{"action":""},"profile_list":{},"profile_read":{"name":""},"profile_save":{"name":"","content":"","revision":""},"profile_apply":{"name":"","revision":""}}'
 		;;
 	call)
 		case "$2" in
 			status) status;;
+			profile_list) exec /usr/libexec/queqiao-profile list;;
+			profile_apply) exec /usr/libexec/queqiao-profile apply;;
 			profile_read) exec /usr/libexec/queqiao-profile read;;
 			profile_save) exec /usr/libexec/queqiao-profile save;;
 			action)

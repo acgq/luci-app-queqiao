@@ -64,13 +64,7 @@ return view.extend({
 		o.validate = function(section, value) {
 			return value !== this.map.lookupOption('socks_port', section)[0].formvalue(section) || _('Metrics and SOCKS5 ports must differ.');
 		};
-		var profile = E('div', { 'class': 'cbi-section' }, [
-			E('h3', {}, _('Device profile')),
-			E('p', {}, initial.profile_exists ? _('Profile installed at /etc/queqiao/router.json.') : _('No profile installed. Enroll an invitation over SSH before enabling the client.')),
-			E('p', {}, _('Keep the profile private (mode 0600). Use the editor to import or update a device profile; enroll new invitations over SSH.')),
-			E('button', { 'class': 'btn cbi-button-action', 'disabled': !L.hasViewPermission() || null, 'click': ui.createHandlerFn(this, function() { return ProfileEditor.open(); }) }, _('Edit device profile'))
-		]);
 		poll.add(function() { return getStatus().then(update); }, 5);
-		return m.render().then(function(node) { return E('div', {}, [ controls, node, profile ]); });
+		return Promise.all([ m.render(), ProfileEditor.render() ]).then(function(nodes) { return E('div', {}, [ controls, nodes[0], nodes[1] ]); });
 	}
 });

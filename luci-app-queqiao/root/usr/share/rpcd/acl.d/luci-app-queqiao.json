@@ -4,7 +4,8 @@
     "read": {
       "ubus": {
         "luci.queqiao": [
-          "status"
+          "status",
+          "profile_list"
         ]
       },
       "uci": [
@@ -23,7 +24,7 @@
     }
   },
   "luci-app-queqiao-profile": {
-    "description": "Read and replace the private Queqiao device profile",
+    "description": "Read and edit private profile drafts; manually apply a selected profile",
     "read": {
       "ubus": {
         "luci.queqiao": [
@@ -34,7 +35,8 @@
     "write": {
       "ubus": {
         "luci.queqiao": [
-          "profile_save"
+          "profile_save",
+          "profile_apply"
         ]
       }
     }
