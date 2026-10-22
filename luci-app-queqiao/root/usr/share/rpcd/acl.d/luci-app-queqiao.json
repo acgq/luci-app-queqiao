@@ -1,0 +1,42 @@
+{
+  "luci-app-queqiao": {
+    "description": "Manage Queqiao without exposing device credentials",
+    "read": {
+      "ubus": {
+        "luci.queqiao": [
+          "status"
+        ]
+      },
+      "uci": [
+        "queqiao"
+      ]
+    },
+    "write": {
+      "ubus": {
+        "luci.queqiao": [
+          "action"
+        ]
+      },
+      "uci": [
+        "queqiao"
+      ]
+    }
+  },
+  "luci-app-queqiao-profile": {
+    "description": "Read and replace the private Queqiao device profile",
+    "read": {
+      "ubus": {
+        "luci.queqiao": [
+          "profile_read"
+        ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "luci.queqiao": [
+          "profile_save"
+        ]
+      }
+    }
+  }
+}

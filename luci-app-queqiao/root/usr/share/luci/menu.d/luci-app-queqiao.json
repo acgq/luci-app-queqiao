@@ -1,0 +1,8 @@
+{
+  "admin/services/queqiao": {
+    "title": "Queqiao",
+    "order": 60,
+    "action": { "type": "view", "path": "queqiao/overview" },
+    "depends": { "acl": [ "luci-app-queqiao" ], "uci": { "queqiao": true } }
+  }
+}

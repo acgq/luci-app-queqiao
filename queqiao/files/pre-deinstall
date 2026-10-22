@@ -1,0 +1,4 @@
+#!/bin/sh
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+/etc/init.d/queqiao stop
+/etc/init.d/queqiao disable

@@ -1,0 +1,42 @@
+#!/bin/sh
+. /usr/share/libubox/jshn.sh
+
+status() {
+	local running=0 enabled=0 profile=0
+	/etc/init.d/queqiao running >/dev/null 2>&1 && running=1
+	/etc/init.d/queqiao enabled >/dev/null 2>&1 && enabled=1
+	[ -f /etc/queqiao/router.json ] && profile=1
+	json_init
+	json_add_boolean running "$running"
+	json_add_boolean enabled "$enabled"
+	json_add_boolean profile_exists "$profile"
+	json_add_string version "$(/usr/bin/queqiaod version 2>/dev/null)"
+	json_dump
+}
+
+case "$1" in
+	list)
+		printf '%s\n' '{"status":{},"action":{"action":""},"profile_read":{},"profile_save":{"content":"","revision":""}}'
+		;;
+	call)
+		case "$2" in
+			status) status;;
+			profile_read) exec /usr/libexec/queqiao-profile read;;
+			profile_save) exec /usr/libexec/queqiao-profile save;;
+			action)
+				# Consume one bounded JSON line; never evaluate an input command.
+				IFS= read -r -n 1024 request
+				json_load "$request" || exit 1
+				json_get_var action action
+				case "$action" in start|stop|restart|enable|disable) ;; *) exit 1;; esac
+				/etc/init.d/queqiao "$action" >/dev/null 2>&1
+				result=$?
+				json_init
+				json_add_int code "$result"
+				json_dump
+				;;
+			*) exit 1;;
+		esac
+		;;
+	*) exit 1;;
+esac

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+umask 077
+mkdir -p /etc/queqiao
+chmod 700 /etc/queqiao
+if [ "$(uci -q get queqiao.main.enabled || true)" = 1 ]; then
+	/etc/init.d/queqiao enable
+	/etc/init.d/queqiao restart
+fi

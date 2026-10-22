@@ -1,0 +1,79 @@
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+USE_PROCD=1
+
+valid_port() {
+	case "$1" in ''|*[!0-9]*) return 1;; esac
+	[ "${#1}" -le 5 ] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+start_service() {
+	local enabled socks_port local_address transport metrics metrics_port log_level max_sessions memory_limit
+	config_load queqiao
+	config_get_bool enabled main enabled 0
+	[ "$enabled" -eq 1 ] || return 0
+	[ -f /etc/queqiao/router.json ] && [ ! -L /etc/queqiao/router.json ] || {
+		logger -t queqiao 'Missing regular profile /etc/queqiao/router.json; enroll using the CLI first'
+		return 1
+	}
+	config_get socks_port main socks_port 12080
+	config_get local_address main local_address auto
+	config_get transport main transport auto
+	config_get_bool metrics main metrics 0
+	config_get metrics_port main metrics_port 12090
+	config_get log_level main log_level info
+	config_get max_sessions main max_sessions 256
+	config_get memory_limit main memory_limit 64MiB
+	valid_port "$socks_port" && valid_port "$metrics_port" || return 1
+	[ "$metrics" -eq 0 ] || [ "$socks_port" != "$metrics_port" ] || return 1
+	case "$transport" in auto|quic|tcp) ;; *) return 1;; esac
+	case "$log_level" in debug|info|warn|error) ;; *) return 1;; esac
+	case "$memory_limit" in 32MiB|64MiB|96MiB|128MiB) ;; *) return 1;; esac
+	case "$local_address" in
+		auto) ;;
+		if:*)
+			local interface="${local_address#if:}"
+			case "$interface" in ''|*[!a-zA-Z0-9_.:-]*) return 1;; esac
+			[ "${#interface}" -le 15 ] || return 1
+			;;
+		*) return 1;;
+	esac
+	case "$max_sessions" in ''|*[!0-9]*) return 1;; esac
+	[ "${#max_sessions}" -le 4 ] && [ "$max_sessions" -ge 1 ] && [ "$max_sessions" -le 4096 ] || return 1
+	umask 077
+	mkdir -p /tmp/queqiao
+	chmod 700 /tmp/queqiao
+	procd_open_instance main
+	procd_set_param command /usr/bin/queqiaod client \
+		--profile /etc/queqiao/router.json \
+		--listen "127.0.0.1:$socks_port" \
+		--local-address "$local_address" --transport "$transport" \
+		--max-sessions "$max_sessions" --max-pending-opens 64 \
+		--log-file /tmp/queqiao/client.log --log-format json \
+		--log-level "$log_level" --log-stderr=false \
+		--log-max-size-mib 1 --log-max-backups 1 --telemetry-log-interval 5s
+	[ "$metrics" -eq 0 ] || procd_append_param command --metrics-listen "127.0.0.1:$metrics_port"
+	procd_set_param env GOMEMLIMIT="$memory_limit" GOGC=50
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param limits nofile="4096 4096"
+	procd_set_param file /etc/config/queqiao /etc/queqiao/router.json
+	procd_close_instance
+}
+
+reload_service() {
+	if [ "$(uci -q get queqiao.main.enabled)" = 1 ]; then
+		enable
+	else
+		disable
+	fi
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger queqiao network
+}
