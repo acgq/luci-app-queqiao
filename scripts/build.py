@@ -104,8 +104,8 @@ def main():
     if epoch < 0:
         parser.error("epoch must be nonnegative")
     revision = commit[:12] + ("-dirty" if dirty else "")
-    package_version = "0.10.0_git" + str(epoch) + "-r6"
-    ui_version = "0.4.0-r1"
+    package_version = "0.10.0_git" + str(epoch) + "-r7"
+    ui_version = "0.4.0-r2"
     env = dict(os.environ, GOOS="linux", GOARCH="arm64", CGO_ENABLED="0", GOTOOLCHAIN="go" + go_version)
     from datetime import datetime, timezone
     date = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -184,7 +184,7 @@ def main():
     packages = []
     for name, entries, version, arch, dependencies in [
         ("queqiao", core, package_version, "aarch64_cortex-a53", "libc ca-bundle"),
-        ("luci-app-queqiao", ui, ui_version, "noarch", "queqiao luci-base rpcd jsonfilter"),
+        ("luci-app-queqiao", ui, ui_version, "noarch", "queqiao queqiao-luci-api-v4 luci-base rpcd jsonfilter"),
     ]:
         for script in ["post-install", "pre-deinstall"]:
             path = ROOT / name / "files" / script

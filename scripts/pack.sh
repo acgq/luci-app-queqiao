@@ -18,6 +18,9 @@ set -- "$apk_tool" mkpkg --compat 3.0.0 \
 	--info "description:Queqiao OpenWrt development package" \
 	--info "depends:$depends" --info "build-time:$epoch" \
 	--files "$stage/root" --output "$output"
+if [ "$name" = queqiao ]; then
+	set -- "$@" --info "provides:queqiao-luci-api-v4=$version"
+fi
 for script in post-install post-upgrade pre-deinstall; do
 	if [ -f "$stage/scripts/$script" ]; then
 		set -- "$@" --script "$script:$stage/scripts/$script"

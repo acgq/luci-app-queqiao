@@ -30,6 +30,9 @@ apk add --allow-untrusted --no-network /tmp/queqiao-<version>.apk \
   /tmp/luci-app-queqiao-<version>.apk
 ```
 
+请同时安装匹配版本的主程序和页面包。页面依赖主包提供的 `queqiao-luci-api-v4`
+能力标记，旧后端不满足该依赖时包管理器会拒绝页面单独升级。
+
 这些是**未签名的本地开发包**，`--allow-untrusted` 只用于这次显式安装；
 不要全局关闭签名校验。全新安装默认不启动客户端。
 

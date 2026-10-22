@@ -71,7 +71,7 @@ Windows 上首次在受限沙箱运行时，本地网络与临时文件权限导
 
 日期：2026-10-23。传输基线提交
 `5b1ab4111149d354c81ff72c3066e174c15f9f9c`；Go 1.26.9。
-主包为 `0.10.0_git1792688400-r6`，LuCI 为 `0.4.0-r1`。
+主包为 `0.10.0_git1792688400-r7`，LuCI 为 `0.4.0-r2`。
 
 - Google HTTPS 检查返回 HTTP 204，ip.sb 官方 IP API 返回 HTTP 200；页面能显示
   Google 检查结果。出口 IP 没有写入此公开记录。
@@ -100,3 +100,6 @@ go test -short -p=1 -timeout 10m -overlay dist/core-overlay.json \
 重启、长期负载、LAN IPv6 或多 VLAN 验证。删除失败恢复/掉电恢复仍未实机
 验证。协议和网关认证保持 version 1；LAN 是显式的无 SOCKS 密码入口，按所选
 LAN 接口的本地 IPv4 与来源子网限制访问，默认仍为回环。
+
+页面包依赖主包的 `queqiao-luci-api-v4` 能力标记。旧后端下单独升级页面的模拟
+安装被依赖检查拒绝；匹配的两个最终包安装成功，Google 检查继续返回 HTTP 204。
