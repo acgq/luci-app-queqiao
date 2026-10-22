@@ -10,7 +10,7 @@ valid_port() {
 }
 
 start_service() {
-	local profile enabled socks_port local_address transport metrics metrics_port log_level max_sessions memory_limit
+	local profile enabled socks_port local_address transport metrics metrics_port log_level max_sessions memory_limit listen_scope listen_address lan_device
 	config_load queqiao
 	config_get_bool enabled main enabled 0
 	[ "$enabled" -eq 1 ] || return 0
@@ -20,6 +20,18 @@ start_service() {
 		return 1
 	}
 	config_get socks_port main socks_port 12080
+	config_get listen_scope main listen_scope loopback
+	listen_address=127.0.0.1
+	case "$listen_scope" in
+		loopback) ;;
+		lan)
+			. /lib/functions/network.sh
+			network_get_device lan_device lan || return 1
+			[ -n "$lan_device" ] || return 1
+			listen_address=0.0.0.0
+			;;
+		*) return 1;;
+	esac
 	config_get local_address main local_address auto
 	config_get transport main transport auto
 	config_get_bool metrics main metrics 0
@@ -49,12 +61,13 @@ start_service() {
 	procd_open_instance main
 	procd_set_param command /usr/bin/queqiaod client \
 		--profile "$profile" \
-		--listen "127.0.0.1:$socks_port" \
+		--listen "$listen_address:$socks_port" \
 		--local-address "$local_address" --transport "$transport" \
 		--max-sessions "$max_sessions" --max-pending-opens 64 \
 		--log-file /tmp/queqiao/client.log --log-format json \
 		--log-level "$log_level" --log-stderr=false \
 		--log-max-size-mib 1 --log-max-backups 1 --telemetry-log-interval 5s
+	[ "$listen_scope" != lan ] || procd_append_param command --socks-lan-interface "$lan_device"
 	[ "$metrics" -eq 0 ] || procd_append_param command --metrics-listen "127.0.0.1:$metrics_port"
 	procd_set_param env GOMEMLIMIT="$memory_limit" GOGC=50
 	procd_set_param respawn 3600 5 5

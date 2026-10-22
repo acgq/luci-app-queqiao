@@ -421,12 +421,92 @@ func activate(name string, data []byte, deadline time.Time) (response, error) {
 	return result, nil
 }
 
+// Remove only inactive entries. Stage the fixed set of private files together;
+// a rename failure restores them before the library lock is released.
+func deleteProfile(name string, deadline time.Time) (response, error) {
+	file, err := lock(filepath.Join(live, name+".json.lock"), deadline)
+	if err != nil {
+		return response{}, err
+	}
+	defer file.Close()
+	paths := []string{
+		filepath.Join(drafts, name+".json"), filepath.Join(drafts, name+".json.bak"),
+		filepath.Join(live, name+".json"), filepath.Join(live, name+".json.bak"),
+		filepath.Join(live, name+".source"),
+	}
+	existing := []string{}
+	for _, path := range paths {
+		_, exists, err := readFile(path, maxProfile)
+		if err != nil {
+			return response{}, err
+		}
+		if exists {
+			existing = append(existing, path)
+		}
+	}
+	stage := filepath.Join(root, ".deleting-profile")
+	if err := os.Mkdir(stage, 0700); err != nil {
+		return response{}, errors.New("cannot stage deletion; check storage or recover an earlier interrupted deletion")
+	}
+	manifest, err := json.Marshal(existing)
+	if err != nil {
+		os.Remove(stage)
+		return response{}, err
+	}
+	if err := writeFile(filepath.Join(stage, "manifest.json"), manifest, false); err != nil {
+		os.Remove(stage)
+		return response{}, err
+	}
+	for i, path := range existing {
+		if err := os.Rename(path, filepath.Join(stage, fmt.Sprint(i))); err != nil {
+			recovered := true
+			for j := i - 1; j >= 0; j-- {
+				if os.Rename(filepath.Join(stage, fmt.Sprint(j)), existing[j]) != nil {
+					recovered = false
+				}
+			}
+			if recovered {
+				os.Remove(filepath.Join(stage, "manifest.json"))
+				os.Remove(stage)
+				return response{}, errors.New("deletion failed; profile files were restored")
+			}
+			return response{}, errors.New("deletion interrupted; recover private files using .deleting-profile/manifest.json")
+		}
+	}
+	result := response{OK: true, Name: name}
+	for _, path := range []string{drafts, live, root} {
+		directory, err := os.Open(path)
+		if err == nil {
+			err = directory.Sync()
+			directory.Close()
+		}
+		if err != nil {
+			result.Warning = "profile removed, but directory durability sync failed"
+		}
+	}
+	clean := true
+	for i := range existing {
+		if os.Remove(filepath.Join(stage, fmt.Sprint(i))) != nil {
+			clean = false
+		}
+	}
+	if clean {
+		if os.Remove(filepath.Join(stage, "manifest.json")) != nil || os.Remove(stage) != nil {
+			clean = false
+		}
+	}
+	if !clean {
+		result.Warning = "profile removed, but private deletion staging needs administrator cleanup"
+	}
+	return result, nil
+}
+
 func execute() (response, error) {
 	if len(os.Args) != 2 {
-		return response{}, errors.New("expected list, read, save, apply or active-path")
+		return response{}, errors.New("expected list, read, save, apply, delete, check or active-path")
 	}
 	operation := os.Args[1]
-	if operation != "list" && operation != "read" && operation != "save" && operation != "apply" {
+	if operation != "list" && operation != "read" && operation != "save" && operation != "apply" && operation != "delete" {
 		return response{}, errors.New("unsupported profile operation")
 	}
 	var input request
@@ -507,6 +587,17 @@ func execute() (response, error) {
 	if input.Revision != revision {
 		return response{}, errors.New("profile changed since loading; refresh the list or reload the editor")
 	}
+	if operation == "delete" {
+		if !exists {
+			return response{}, errors.New("profile does not exist; refresh the list")
+		}
+		if input.Name == active {
+			return response{}, errors.New("cannot delete the applied profile; apply a different profile first")
+		}
+		result, err := deleteProfile(input.Name, deadline)
+		result.Active = active
+		return result, err
+	}
 	if operation == "apply" {
 		if !exists {
 			return response{}, errors.New("save the named profile before applying it")
@@ -529,6 +620,13 @@ func execute() (response, error) {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "check" {
+		if err := json.NewEncoder(os.Stdout).Encode(connectivity()); err != nil {
+			fmt.Fprintln(os.Stderr, "cannot encode connectivity response")
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "active-path" {
 		if err := directory(root, false); err != nil {
 			fmt.Fprintln(os.Stderr, "invalid profile directory")

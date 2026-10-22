@@ -1,0 +1,232 @@
+--- a/cmd/queqiaod/main.go
++++ b/cmd/queqiaod/main.go
+@@ -533,6 +533,7 @@
+ 	logMaxBackups                                               int
+ 	telemetryLogInterval                                        time.Duration
+ 	metricsListen                                               string
++	socksLANInterface                                           string
+ }
+ 
+ func bindRuntimeFlags(fs *flag.FlagSet, opts *runtimeOptions, client bool) {
+@@ -577,6 +578,7 @@
+ 	fs.StringVar(&opts.metricsListen, "metrics-listen", "", "optional metrics listen address")
+ 	if client {
+ 		fs.StringVar(&opts.localAddress, "local-address", "auto", "outer source: auto, IP, or if:NAME")
++		fs.StringVar(&opts.socksLANInterface, "socks-lan-interface", "", "opt in to unauthenticated IPv4 SOCKS access from this LAN interface's subnets")
+ 		fs.IntVar(&opts.maxPendingOpens, "max-pending-opens", 256, "concurrent remote flow opens")
+ 		fs.BoolVar(&opts.quicPool, "quic-pool", true, "reuse a persistent QUIC connection")
+ 		fs.StringVar(&opts.pathProfile, "path-profile", "", "deployment this client runs in: "+strings.Join(profile.Names(), ", ")+" (default is the supported access-link profile)")
+@@ -615,8 +617,11 @@
+ 	if client {
+ 		host, _, err := net.SplitHostPort(opts.listen)
+ 		ip := net.ParseIP(host)
+-		if err != nil || ip == nil || !ip.IsLoopback() {
++		if err != nil || ip == nil || !ip.IsLoopback() && opts.socksLANInterface == "" {
+ 			return errors.New("client --listen must use a literal loopback IP; SOCKS has no remote authentication")
++		}
++		if opts.socksLANInterface != "" && (ip.To4() == nil || !ip.IsUnspecified()) {
++			return errors.New("--socks-lan-interface requires --listen 0.0.0.0:PORT")
+ 		}
+ 	}
+ 	// The receive limit is protocol.MaxPayload and is not configurable: two
+@@ -744,6 +749,9 @@
+ 	}
+ 	defer finishRuntimeLog(logger, logSink, "client", &returnErr)
+ 	if *providersPath != "" {
++		if opts.socksLANInterface != "" {
++			return errors.New("--socks-lan-interface is only supported with a single --profile")
++		}
+ 		return runProviderClients(*providersPath, *noAutoRenew, opts, logger)
+ 	}
+ 	logRuntimeConfiguration(logger, opts, true)
+--- a/cmd/queqiaod/providers.go
++++ b/cmd/queqiaod/providers.go
+@@ -188,7 +188,8 @@
+ 	}
+ 	return pep.NewClient(pep.ClientConfig{
+ 		ListenAddr: listen, RemoteAddr: profile.Endpoint, LocalAddress: opts.localAddress,
+-		Credentials: credentials, ChunkSize: opts.chunkSize,
++		LANInterface: opts.socksLANInterface,
++		Credentials:  credentials, ChunkSize: opts.chunkSize,
+ 		DialTimeout: opts.dialTimeout, HandshakeTimeout: opts.handshakeTimeout,
+ 		FlowIdleTimeout: opts.flowIdleTimeout, FlowMaxLifetime: opts.flowMaxLifetime,
+ 		MaxSessions: opts.maxSessions, SessionLimit: sessionLimit, MaxPendingOpens: opts.maxPendingOpens, Transport: pep.TransportKind(opts.transport),
+--- a/internal/pep/client.go
++++ b/internal/pep/client.go
+@@ -64,7 +64,10 @@
+ )
+ 
+ type ClientConfig struct {
+-	ListenAddr   string
++	ListenAddr string
++	// LANInterface opts an IPv4 wildcard listener into trusted LAN access.
++	// Empty preserves the existing local listener behavior.
++	LANInterface string
+ 	RemoteAddr   string
+ 	LocalAddress string
+ 	// SocketControl is invoked after an outer socket is created and before it
+@@ -420,6 +423,11 @@
+ 	if cfg.ListenAddr == "" || cfg.RemoteAddr == "" {
+ 		return nil, errors.New("client listen and remote addresses are required")
+ 	}
++	if cfg.LANInterface != "" {
++		if err := validateLANListener(cfg.ListenAddr, cfg.LANInterface); err != nil {
++			return nil, err
++		}
++	}
+ 	if err := validateLocalAddressSpec(cfg.LocalAddress); err != nil {
+ 		return nil, err
+ 	}
+@@ -635,7 +643,13 @@
+ }
+ 
+ func (c *Client) Serve(ctx context.Context) error {
+-	listener, err := ListenLocal(ctx, c.cfg.ListenAddr)
++	var listener net.Listener
++	var err error
++	if c.cfg.LANInterface != "" {
++		listener, err = (&net.ListenConfig{KeepAlive: 30 * time.Second}).Listen(ctx, "tcp4", c.cfg.ListenAddr)
++	} else {
++		listener, err = ListenLocal(ctx, c.cfg.ListenAddr)
++	}
+ 	if err != nil {
+ 		return fmt.Errorf("listen on local SOCKS5 address: %w", err)
+ 	}
+@@ -725,6 +739,10 @@
+ 				continue
+ 			}
+ 			return fmt.Errorf("accept local connection: %w", acceptErr)
++		}
++		if c.cfg.LANInterface != "" && !allowLANConnection(c.cfg.LANInterface, conn) {
++			_ = conn.Close()
++			continue
+ 		}
+ 		if slot, admitted := c.sessionLimit.acquire(); admitted {
+ 			wg.Add(1)
+--- /dev/null
++++ b/internal/pep/lan_ingress.go
+@@ -0,0 +1,74 @@
++package pep
++
++import (
++	"errors"
++	"net"
++	"net/netip"
++	"strconv"
++	"strings"
++)
++
++func lanPrefixes(name string) ([]netip.Prefix, error) {
++	if len(name) == 0 || len(name) > 15 || strings.ContainsAny(name, "/\\ \t\r\n") {
++		return nil, errors.New("invalid SOCKS LAN interface")
++	}
++	iface, err := net.InterfaceByName(name)
++	if err != nil || iface.Flags&net.FlagUp == 0 || iface.Flags&(net.FlagLoopback|net.FlagPointToPoint) != 0 {
++		return nil, errors.New("SOCKS LAN interface must be an active non-loopback LAN device")
++	}
++	addresses, err := iface.Addrs()
++	if err != nil || len(addresses) > 64 {
++		return nil, errors.New("cannot enumerate bounded SOCKS LAN addresses")
++	}
++	prefixes := []netip.Prefix{}
++	for _, address := range addresses {
++		prefix, err := netip.ParsePrefix(address.String())
++		if err == nil && prefix.Addr().Is4() && !prefix.Addr().IsLoopback() && !prefix.Addr().IsUnspecified() && !prefix.Addr().IsMulticast() && !prefix.Addr().IsLinkLocalUnicast() {
++			prefixes = append(prefixes, prefix)
++		}
++	}
++	if len(prefixes) == 0 {
++		return nil, errors.New("SOCKS LAN interface has no usable IPv4 addresses")
++	}
++	return prefixes, nil
++}
++
++func validateLANListener(address, iface string) error {
++	host, port, err := net.SplitHostPort(address)
++	ip := net.ParseIP(host)
++	number, portErr := strconv.Atoi(port)
++	if err != nil || ip == nil || ip.To4() == nil || !ip.IsUnspecified() || portErr != nil || number < 1 || number > 65535 {
++		return errors.New("SOCKS LAN mode requires --listen 0.0.0.0:PORT with a nonzero port")
++	}
++	_, err = lanPrefixes(iface)
++	return err
++}
++
++// A wildcard socket accepts localhost and connections addressed to the named
++// LAN device from one of its IPv4 subnets. WAN destination addresses and peers
++// outside those subnets are rejected before SOCKS parsing or session admission.
++func allowLANConnection(iface string, conn net.Conn) bool {
++	local, localOK := conn.LocalAddr().(*net.TCPAddr)
++	peer, peerOK := conn.RemoteAddr().(*net.TCPAddr)
++	if !localOK || !peerOK {
++		return false
++	}
++	if local.IP.IsLoopback() && peer.IP.IsLoopback() {
++		return true
++	}
++	localIP, localOK := netip.AddrFromSlice(local.IP)
++	peerIP, peerOK := netip.AddrFromSlice(peer.IP)
++	if !localOK || !peerOK || !localIP.Unmap().Is4() || !peerIP.Unmap().Is4() {
++		return false
++	}
++	prefixes, err := lanPrefixes(iface)
++	if err != nil {
++		return false
++	}
++	for _, prefix := range prefixes {
++		if prefix.Addr() == localIP.Unmap() && prefix.Contains(peerIP.Unmap()) {
++			return true
++		}
++	}
++	return false
++}
+--- a/internal/pep/udp.go
++++ b/internal/pep/udp.go
+@@ -106,7 +106,18 @@
+ }
+ 
+ func (c *Client) handleUDPAssociate(ctx context.Context, control net.Conn) {
+-	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
++	bindIP := net.ParseIP("127.0.0.1")
++	var sourceIP net.IP
++	if c.cfg.LANInterface != "" {
++		local, localOK := control.LocalAddr().(*net.TCPAddr)
++		peer, peerOK := control.RemoteAddr().(*net.TCPAddr)
++		if !localOK || !peerOK || local.IP.To4() == nil || peer.IP.To4() == nil {
++			_ = socks5.WriteReply(control, socks5.ReplyGeneralFailure, nil)
++			return
++		}
++		bindIP, sourceIP = local.IP.To4(), peer.IP.To4()
++	}
++	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: bindIP})
+ 	if err != nil {
+ 		_ = socks5.WriteReply(control, socks5.ReplyGeneralFailure, nil)
+ 		c.cfg.Logger.Warn("local UDP relay bind failed", "error", err)
+@@ -172,7 +183,7 @@
+ 		laneCtx, laneCancel := context.WithCancel(assocCtx)
+ 		resultCh := make(chan error, 2)
+ 		go func(activeLane *authenticatedLane, activeFlowID uint64) {
+-			resultCh <- c.runClientUDPUplink(laneCtx, udpConn, activeLane.fc, activeLane.sessionID, activeFlowID, &peerMu, &peer, activity, &counters)
++			resultCh <- c.runClientUDPUplink(laneCtx, udpConn, activeLane.fc, activeLane.sessionID, activeFlowID, &peerMu, &peer, activity, &counters, sourceIP)
+ 		}(lane, flowID)
+ 		go func(activeLane *authenticatedLane, activeFlowID uint64) {
+ 			resultCh <- runClientUDPDownlink(laneCtx, udpConn, activeLane.fc, activeLane.sessionID, activeFlowID, &peerMu, &peer, activity, &counters)
+@@ -508,7 +519,7 @@
+ 	return transportErr
+ }
+ 
+-func (c *Client) runClientUDPUplink(ctx context.Context, udpConn *net.UDPConn, fc *frameConn, sessionID [16]byte, flowID uint64, peerMu *sync.RWMutex, peer **net.UDPAddr, activity chan<- struct{}, counters *udpCounters) error {
++func (c *Client) runClientUDPUplink(ctx context.Context, udpConn *net.UDPConn, fc *frameConn, sessionID [16]byte, flowID uint64, peerMu *sync.RWMutex, peer **net.UDPAddr, activity chan<- struct{}, counters *udpCounters, sourceIP net.IP) error {
+ 	buf := make([]byte, c.memoryLimits.maxUDPPacketBytes)
+ 	var sequence uint64
+ 	for {
+@@ -536,6 +547,9 @@
+ 		}
+ 		// Zero-length UDP datagrams are valid and continue through the same
+ 		// association and SOCKS envelope as non-empty datagrams.
++		if sourceIP != nil && !sourceIP.Equal(addr.IP) {
++			continue
++		}
+ 		peerMu.Lock()
+ 		if *peer == nil {
+ 			*peer = cloneUDPAddr(addr)

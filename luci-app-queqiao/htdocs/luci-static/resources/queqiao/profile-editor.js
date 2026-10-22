@@ -6,6 +6,7 @@ var listProfiles = rpc.declare({ object: 'luci.queqiao', method: 'profile_list',
 var readProfile = rpc.declare({ object: 'luci.queqiao', method: 'profile_read', params: [ 'name' ], expect: {} });
 var saveProfile = rpc.declare({ object: 'luci.queqiao', method: 'profile_save', params: [ 'name', 'content', 'revision' ], expect: {} });
 var applyProfile = rpc.declare({ object: 'luci.queqiao', method: 'profile_apply', params: [ 'name', 'revision' ], expect: {} });
+var deleteProfile = rpc.declare({ object: 'luci.queqiao', method: 'profile_delete', params: [ 'name', 'revision' ], expect: {} });
 
 return L.Class.extend({
 	open: function(name, copy, onSaved) {
@@ -63,6 +64,7 @@ return L.Class.extend({
 		var all = [];
 		var busy = false;
 		var active = E('p');
+		var activeName = '';
 		var note = E('p', { 'role': 'status' });
 		var selected = E('select', { 'class': 'cbi-input-select', 'aria-label': _('选择配置') });
 		var buttons = [];
@@ -76,6 +78,7 @@ return L.Class.extend({
 			return listProfiles().then(function(data) {
 				if (!data.ok) throw new Error(data.error || _('无法读取配置库。'));
 				all = data.profiles || [];
+				activeName = data.active;
 				selected.replaceChildren();
 				all.forEach(function(item) {
 					var label = item.name;
@@ -104,6 +107,31 @@ return L.Class.extend({
 			addButton(_('新建配置'), false, function() { return self.open(null, false, refresh); }),
 			addButton(_('复制所选'), true, function() { return self.open(selected.value, true, refresh); }),
 			addButton(_('编辑所选'), true, function() { return self.open(selected.value, false, refresh); }),
+			addButton(_('删除所选'), true, function() {
+				var chosen = all.find(function(item) { return item.name === selected.value; });
+				if (!chosen || busy) return;
+				if (chosen.name === activeName) {
+					note.textContent = _('不能删除当前应用的配置，请先应用其他配置。'); return;
+				}
+				var message = E('p', { 'role': 'status' });
+				var cancel = E('button', { 'class': 'btn', 'click': function() { ui.hideModal(); } }, _('取消'));
+				var confirm = E('button', { 'class': 'btn cbi-button-negative important', 'click': function() {
+					if (busy) return;
+					busy = true; update(); confirm.disabled = cancel.disabled = true;
+					message.textContent = _('正在删除…');
+					return deleteProfile(chosen.name, chosen.revision).then(function(result) {
+						if (!result.ok) throw new Error(result.error || _('删除失败。'));
+						ui.hideModal();
+						return refresh().then(function() { note.textContent = result.warning || _('已删除配置：') + chosen.name; });
+					}).catch(function(err) { message.textContent = err.message; }).finally(function() {
+						busy = false; update(); confirm.disabled = cancel.disabled = false;
+					});
+				} }, _('确认删除'));
+				ui.showModal(_('删除配置'), [
+					E('p', {}, _('将永久删除配置“') + chosen.name + _('”及其草稿、运行副本和相关备份。此操作不可恢复，当前连接不会切换。')),
+					message, E('div', { 'class': 'right' }, [ cancel, ' ', confirm ])
+				]);
+			}),
 			addButton(_('应用所选配置'), true, function() {
 				var chosen = all.find(function(item) { return item.name === selected.value; });
 				if (!chosen || busy) return;

@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=queqiao
 PKG_VERSION:=0.10.0
-PKG_RELEASE:=5
+PKG_RELEASE:=6
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=Queqiao OpenWrt contributors
 
@@ -18,7 +18,7 @@ define Package/queqiao
   CATEGORY:=Network
   TITLE:=Queqiao paired WAN transport client
   URL:=https://github.com/bojieli/queqiao
-  DEPENDS:=+libc
+  DEPENDS:=+libc +ca-bundle
 endef
 
 define Package/queqiao/conffiles

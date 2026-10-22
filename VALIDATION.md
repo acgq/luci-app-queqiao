@@ -66,3 +66,37 @@ Windows 上首次在受限沙箱运行时，本地网络与临时文件权限导
 配置库与运行副本分离，原协议、回环监听和全局资源参数未改变；新增 32 份
 配置及各份 64 KiB 的边界。整机重启、长期负载、其他架构、SDK 与正式发布
 流水线仍未验证。
+
+## 0.4 连通检查、配置删除与 LAN 入口
+
+日期：2026-10-23。传输基线提交
+`5b1ab4111149d354c81ff72c3066e174c15f9f9c`；Go 1.26.9。
+主包为 `0.10.0_git1792688400-r6`，LuCI 为 `0.4.0-r1`。
+
+- Google HTTPS 检查返回 HTTP 204，ip.sb 官方 IP API 返回 HTTP 200；页面能显示
+  Google 检查结果。出口 IP 没有写入此公开记录。
+- LAN 模式从局域网电脑实际执行 SOCKS5 HTTPS 成功；UDP ASSOCIATE 返回 LAN
+  地址，随后通过 UDP 中继收到有效 DNS 响应。
+- 从 LAN 电脑定向连接路由器自身 WAN IPv4，未获得 SOCKS 协商；这不是从真实
+  外部 WAN 设备发起的独立验证，不能替代外围防火墙和多网络验证。
+- 测试后恢复原监听范围，当前应用名称与所有原有配置内容保持不变。
+- 仅用一个不含私钥、从未应用的临时空配置验证删除：旧修订号被拒绝；正确
+  修订号删除成功，暂存数据清理完成。浏览器检查确认窗口并取消，没有删除
+  用户已有配置。当前应用配置的删除保护仅做代码检查，未进行实机删除尝试。
+- 新增 helper 与 LAN 补丁的 Go vet、JavaScript/JSON、设备 shell 语法检查通过。
+  以下现有短测试使用构建同样的 core overlay，通过且未新增测试用例：
+
+```sh
+go test -short -p=1 -timeout 10m -overlay dist/core-overlay.json \
+  ./cmd/queqiaod ./internal/pep ./internal/socks5
+```
+
+- LAN 补丁下的 `queqiaod` 对 Linux、macOS、Windows 的 amd64/arm64 六目标编译
+  均通过；未将编译成功当成这些平台上的运行资格证明。
+- APK 完整性验证、安装和配置保留检查通过；包内加入 `ca-bundle` 依赖。
+  打包目录统一使用 POSIX 路径，修正 Windows 下目录分隔符的问题。
+
+没有运行 race（本机没有可用 CGO C 编译器）、全库测试、完整发布校验、整机
+重启、长期负载、LAN IPv6 或多 VLAN 验证。删除失败恢复/掉电恢复仍未实机
+验证。协议和网关认证保持 version 1；LAN 是显式的无 SOCKS 密码入口，按所选
+LAN 接口的本地 IPv4 与来源子网限制访问，默认仍为回环。

@@ -5,6 +5,7 @@
 'require poll';
 'require ui';
 'require queqiao.profile-editor as ProfileEditor';
+'require queqiao.connectivity as Connectivity';
 
 var getStatus = rpc.declare({ object: 'luci.queqiao', method: 'status', expect: {} });
 var serviceAction = rpc.declare({ object: 'luci.queqiao', method: 'action', params: [ 'action' ], expect: {} });
@@ -43,8 +44,12 @@ return view.extend({
 		s.addremove = false;
 		var o = s.option(form.Flag, 'enabled', _('Enable client'), _('Save & Apply starts or stops the configured client.'));
 		o.rmempty = false;
-		o = s.option(form.Value, 'socks_port', _('Local SOCKS5 port'), _('Listens on 127.0.0.1 only.'));
+		o = s.option(form.Value, 'socks_port', _('Local SOCKS5 port'), _('SOCKS5 端口；监听地址由下方范围选项控制。'));
 		o.datatype = 'port'; o.rmempty = false;
+		o = s.option(form.ListValue, 'listen_scope', _('SOCKS5 监听范围'), _('局域网模式允许 LAN 内的设备使用代理；指标接口始终仅限本机。'));
+		o.value('loopback', _('仅本机（127.0.0.1）'));
+		o.value('lan', _('局域网（所有 LAN IPv4 地址）'));
+		o.default = 'loopback'; o.rmempty = false;
 		o = s.option(form.Value, 'local_address', _('Physical outbound interface'), _('Use auto or if: followed by a Linux device name, for example if:wan.'));
 		o.value('auto', _('Automatic')); o.rmempty = false;
 		o.validate = function(section, value) {
@@ -65,6 +70,6 @@ return view.extend({
 			return value !== this.map.lookupOption('socks_port', section)[0].formvalue(section) || _('Metrics and SOCKS5 ports must differ.');
 		};
 		poll.add(function() { return getStatus().then(update); }, 5);
-		return Promise.all([ m.render(), ProfileEditor.render() ]).then(function(nodes) { return E('div', {}, [ controls, nodes[0], nodes[1] ]); });
+		return Promise.all([ m.render(), ProfileEditor.render() ]).then(function(nodes) { return E('div', {}, [ controls, Connectivity.render(), nodes[0], nodes[1] ]); });
 	}
 });

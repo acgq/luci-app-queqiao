@@ -18,11 +18,13 @@ status() {
 
 case "$1" in
 	list)
-		printf '%s\n' '{"status":{},"action":{"action":""},"profile_list":{},"profile_read":{"name":""},"profile_save":{"name":"","content":"","revision":""},"profile_apply":{"name":"","revision":""}}'
+		printf '%s\n' '{"status":{},"action":{"action":""},"check_connectivity":{"target":""},"profile_list":{},"profile_read":{"name":""},"profile_save":{"name":"","content":"","revision":""},"profile_apply":{"name":"","revision":""},"profile_delete":{"name":"","revision":""}}'
 		;;
 	call)
 		case "$2" in
 			status) status;;
+			check_connectivity) exec /usr/libexec/queqiao-profile check;;
+			profile_delete) exec /usr/libexec/queqiao-profile delete;;
 			profile_list) exec /usr/libexec/queqiao-profile list;;
 			profile_apply) exec /usr/libexec/queqiao-profile apply;;
 			profile_read) exec /usr/libexec/queqiao-profile read;;

@@ -15,7 +15,8 @@
     "write": {
       "ubus": {
         "luci.queqiao": [
-          "action"
+          "action",
+          "check_connectivity"
         ]
       },
       "uci": [
@@ -36,7 +37,8 @@
       "ubus": {
         "luci.queqiao": [
           "profile_save",
-          "profile_apply"
+          "profile_apply",
+          "profile_delete"
         ]
       }
     }

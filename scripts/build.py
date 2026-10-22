@@ -7,7 +7,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import tarfile
@@ -41,11 +41,36 @@ def source_digest(source):
     return checksum.hexdigest()
 
 
+def patched_overlay(source, output):
+    patch = ROOT / "patches/100-lan-ingress.patch"
+    paths = re.findall(r"(?m)^\+\+\+ b/([^\t\n]+)", patch.read_text(encoding="utf-8"))
+    if not paths or len(paths) > 16:
+        raise RuntimeError("Invalid LAN patch file set")
+    staged = output / "patched-core"
+    staged.mkdir(exist_ok=True)
+    mapping = {}
+    for name in paths:
+        relative = PurePosixPath(name)
+        if relative.is_absolute() or ".." in relative.parts or relative.suffix != ".go" or not name.startswith(("cmd/queqiaod/", "internal/pep/")):
+            raise RuntimeError("LAN patch contains an unsupported path")
+        target = staged / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        original = source / name
+        if original.is_file():
+            target.write_bytes(original.read_bytes())
+        elif target.exists():
+            target.unlink()
+        mapping[str(original)] = str(target)
+    for mode in ["--check", "--apply"]:
+        subprocess.run(["git", "apply", "--no-index", "--whitespace=error", mode, str(patch)], cwd=staged, check=True)
+    return mapping, patch
+
+
 def tar_payload(path, entries, epoch):
     # Normalize Windows modes, ownership, timestamps and ordering explicitly.
     directories = {"root", "scripts"}
     for name in entries:
-        directories.update(str(p) for p in Path(name).parents if str(p) != ".")
+        directories.update(str(p) for p in PurePosixPath(name).parents if str(p) != ".")
     with tarfile.open(path, "w", format=tarfile.USTAR_FORMAT) as archive:
         for name in sorted(directories):
             info = tarfile.TarInfo(name)
@@ -79,27 +104,30 @@ def main():
     if epoch < 0:
         parser.error("epoch must be nonnegative")
     revision = commit[:12] + ("-dirty" if dirty else "")
-    package_version = "0.10.0_git" + str(epoch) + "-r5"
-    ui_version = "0.3.0-r1"
+    package_version = "0.10.0_git" + str(epoch) + "-r6"
+    ui_version = "0.4.0-r1"
     env = dict(os.environ, GOOS="linux", GOARCH="arm64", CGO_ENABLED="0", GOTOOLCHAIN="go" + go_version)
     from datetime import datetime, timezone
     date = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     flags = f"-s -w -X main.version={package_version} -X main.commit={revision} -X main.buildDate={date}"
-    command = ["go", "build", "-trimpath", "-buildvcs=false", "-ldflags", flags, "-o", str(output / "queqiaod"), "./cmd/queqiaod"]
     source_hash = source_digest(source)
+    core_mapping, core_patch = patched_overlay(source, output)
+    core_overlay = output / "core-overlay.json"
+    core_overlay.write_text(json.dumps({"Replace": core_mapping}), encoding="utf-8")
+    command = ["go", "build", "-trimpath", "-buildvcs=false", "-overlay", str(core_overlay), "-ldflags", flags, "-o", str(output / "queqiaod"), "./cmd/queqiaod"]
     subprocess.run(command, cwd=source, env=env, check=True)
     if source_digest(source) != source_hash or run(["git", "rev-parse", "HEAD"], cwd=source) != commit:
         raise RuntimeError("Source checkout changed during compilation; run the build again")
-    virtual_helper = source / "cmd" / "queqiao-profile-editor" / "main.go"
     helper_source = ROOT / "tools/profile/main.go"
     overlay = output / "profile-overlay.json"
-    overlay.write_text(json.dumps({"Replace": {str(virtual_helper): str(helper_source)}}), encoding="utf-8")
+    helper_sources = sorted((ROOT / "tools/profile").glob("*.go"))
+    helper_mapping = {str(source / "cmd/queqiao-profile-editor" / path.name): str(path) for path in helper_sources}
+    overlay.write_text(json.dumps({"Replace": {**core_mapping, **helper_mapping}}), encoding="utf-8")
     helper_command = ["go", "build", "-trimpath", "-buildvcs=false", "-overlay", str(overlay),
                       "-ldflags", "-s -w", "-o", str(output / "queqiao-profile"), "./cmd/queqiao-profile-editor"]
     subprocess.run(helper_command, cwd=source, env=env, check=True)
     if source_digest(source) != source_hash or run(["git", "rev-parse", "HEAD"], cwd=source) != commit:
         raise RuntimeError("Source checkout changed during helper compilation; run the build again")
-    overlay.unlink()
     metadata = {
         "source_commit": commit, "source_dirty": dirty, "epoch": epoch,
         "tracked_source_sha256": source_hash,
@@ -108,8 +136,10 @@ def main():
         "binary_sha256": digest(output / "queqiaod"),
         "profile_helper_sha256": digest(output / "queqiao-profile"),
         "profile_helper_source_sha256": digest(helper_source),
+        "profile_helper_sources_sha256": {path.name: digest(path) for path in helper_sources},
+        "core_patch_sha256": digest(core_patch),
         "go_mod_sha256": digest(source / "go.mod"), "go_sum_sha256": digest(source / "go.sum"),
-        "build_command": [part if part != str(output / "queqiaod") else "dist/queqiaod" for part in command],
+        "build_command": ["dist/queqiaod" if part == str(output / "queqiaod") else "dist/core-overlay.json" if part == str(core_overlay) else part for part in command],
         "tracked_diff_sha256": hashlib.sha256(subprocess.check_output(["git", "diff", "HEAD", "--binary"], cwd=source)).hexdigest(),
         "unsigned_development_build": True,
     }
@@ -153,7 +183,7 @@ def main():
                 ui[name] = (path.read_bytes(), 0o755 if "/libexec/" in name else 0o644)
     packages = []
     for name, entries, version, arch, dependencies in [
-        ("queqiao", core, package_version, "aarch64_cortex-a53", "libc"),
+        ("queqiao", core, package_version, "aarch64_cortex-a53", "libc ca-bundle"),
         ("luci-app-queqiao", ui, ui_version, "noarch", "queqiao luci-base rpcd jsonfilter"),
     ]:
         for script in ["post-install", "pre-deinstall"]:
