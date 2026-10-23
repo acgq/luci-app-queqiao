@@ -22,6 +22,17 @@ Queqiao 的 OpenWrt APK 打包与 LuCI 管理页面，独立于传输核心仓�
 
 ## 安装
 
+本仓库的 [Releases](https://github.com/acgq/luci-app-queqiao/releases) 只提供 LuCI APK
+和校验文件；主程序 APK 由独立仓库构建。请先安装兼容的后端包：除了
+`queqiaod`，还需包含本仓库的 profile helper、procd/UCI 集成，并提供
+`queqiao-luci-api-v4` 能力标记。单独的可执行文件不能满足页面依赖。
+
+已有兼容后端时，只需安装页面包：
+
+```sh
+apk add --allow-untrusted --no-network /tmp/luci-app-queqiao-0.4.0-r2.apk
+```
+
 先检查设备架构为 `aarch64_cortex-a53`。将两个 APK 复制到路由器 `/tmp`，
 核对 `SHA256SUMS` 后安装对应的实际文件名：
 
