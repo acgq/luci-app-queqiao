@@ -236,3 +236,11 @@ LuCI 使用原生 JavaScript view、UCI、有限方法的 rpcd 插件及最小 A
 备份内若含配置或密钥，只能留在受保护的路由器目录，不要公开。
 
 协议兼容性和认证由上游核心负责；本仓库不改变网关认证或 Queqiao 网络协议；LAN 入口访问范围由显式选项控制。
+
+## Actions 构建
+
+在 **OpenWrt APK packages** 工作流手动填入 `acgq/queqiao` 的完整 40 位
+提交 SHA。工作流从该提交构建，应用本仓库的 LAN 入口补丁，使用固定版本和
+SHA256 的 apk-tools 生成 `aarch64_cortex-a53` 核心包及 noarch LuCI 包。
+下载同次运行的 APK、SHA256SUMS、BUILDINFO.json 和模块记录，先核对校验和。
+这些仍是未签名的开发包，不会自动发布 Release 或安装到路由器。

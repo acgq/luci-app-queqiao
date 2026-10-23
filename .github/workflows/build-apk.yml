@@ -1,0 +1,91 @@
+name: OpenWrt APK packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full acgq/queqiao commit SHA to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openwrt-${{ inputs.source_commit }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: packaging
+      - name: Validate source commit
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: acgq/queqiao
+          ref: ${{ inputs.source_commit }}
+          path: core
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+      - name: Install packaging prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fakeroot
+      - name: Download pinned apk-tools
+        run: |
+          set -euo pipefail
+          tool="$RUNNER_TEMP/apk-tools"
+          mkdir -p "$tool"
+          curl --fail --location --silent --show-error --max-time 90 \
+            https://dl-cdn.alpinelinux.org/alpine/edge/main/x86_64/apk-tools-static-3.0.8-r0.apk \
+            --output "$tool/apk-tools-static.apk"
+          echo "673f1bfb22136fc42ca035321cf731a4ad0452c000928666cb39a138f0c277bf  $tool/apk-tools-static.apk" | sha256sum -c -
+          tar -xzf "$tool/apk-tools-static.apk" -C "$tool" sbin/apk.static
+          "$tool/sbin/apk.static" --version
+          echo "APK_TOOL=$tool/sbin/apk.static" >> "$GITHUB_ENV"
+      - name: Build unsigned development APKs
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          test "$(git -C core rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test -z "$(git -C core status --porcelain --untracked-files=all)"
+          epoch=$(git -C core show -s --format=%ct HEAD)
+          fakeroot python3 packaging/scripts/build.py --source "$GITHUB_WORKSPACE/core" \
+            --epoch "$epoch" --apk-tool "$APK_TOOL"
+          (cd packaging/dist && sha256sum -c SHA256SUMS)
+          for package in packaging/dist/*.apk; do
+            "$APK_TOOL" verify --allow-untrusted "$package"
+          done
+          python3 - <<'PY'
+          import json, os, pathlib
+          p = pathlib.Path('packaging/dist/BUILDINFO.json')
+          info = json.loads(p.read_text())
+          assert info['source_commit'] == os.environ['SOURCE_COMMIT']
+          assert not info['source_dirty']
+          assert info['package_arch'] == 'aarch64_cortex-a53'
+          assert info['wire_version'] == 1
+          PY
+          echo "Core source: $SOURCE_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+          echo "Packaging source: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: queqiao-openwrt-${{ inputs.source_commit }}
+          path: |
+            packaging/dist/*.apk
+            packaging/dist/SHA256SUMS
+            packaging/dist/BUILDINFO.json
+            packaging/dist/modules.json
+          if-no-files-found: error
+          retention-days: 30
