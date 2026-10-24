@@ -9,8 +9,71 @@ var applyProfile = rpc.declare({ object: 'luci.queqiao', method: 'profile_apply'
 var deleteProfile = rpc.declare({ object: 'luci.queqiao', method: 'profile_delete', params: [ 'name', 'revision' ], expect: {} });
 
 return L.Class.extend({
-	open: function(name, copy, onSaved) {
-		var load = name ? readProfile(name) : Promise.resolve({ ok: true, content: '', revision: '' });
+	importFile: function(onSaved) {
+		var self = this;
+		var busy = false;
+		var fileInput = E('input', {
+			'type': 'file', 'accept': '.json,application/json', 'aria-label': _('选择配置 JSON 文件')
+		});
+		var message = E('p', { 'role': 'status' });
+		var cancel = E('button', { 'type': 'button', 'class': 'btn', 'click': function() {
+			if (!busy) { fileInput.value = ''; ui.hideModal(); }
+		} }, _('取消'));
+		var load = E('button', { 'type': 'button', 'class': 'btn cbi-button-action important', 'disabled': true, 'click': function() {
+			if (busy) return;
+			var file = fileInput.files && fileInput.files[0];
+			if (!file || file.size < 1 || file.size > 65536) {
+				message.textContent = _('请选择 1–65536 字节的 UTF-8 JSON 文件。'); return;
+			}
+			busy = true; load.disabled = cancel.disabled = fileInput.disabled = true;
+			message.textContent = _('正在读取文件…');
+			return file.arrayBuffer().then(function(buffer) {
+				var content;
+				try { content = new TextDecoder('utf-8', { fatal: true }).decode(buffer); }
+				catch (err) { throw new Error(_('文件必须使用 UTF-8 编码。')); }
+				try {
+					var value = JSON.parse(content);
+					if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();
+				}
+				catch (err) { throw new Error(_('文件必须包含有效的 JSON 配置对象，尚未上传或保存。')); }
+				var name = Array.from(file.name.replace(/\.json$/i, '').replace(/[^\p{L}\p{N}_-]/gu, '_').replace(/^[_-]+/, '')).slice(0, 48).join('');
+				while (new TextEncoder().encode(name).length > 128) name = Array.from(name).slice(0, -1).join('');
+				fileInput.value = ''; ui.hideModal();
+				return self.open(null, false, onSaved, { name: name, content: content });
+			}).catch(function(err) { message.textContent = err.message; }).finally(function() {
+				busy = false; cancel.disabled = fileInput.disabled = false;
+				load.disabled = !(fileInput.files && fileInput.files.length);
+			});
+		} }, _('载入文件'));
+		fileInput.addEventListener('change', function() {
+			load.disabled = !(fileInput.files && fileInput.files.length);
+			message.textContent = '';
+		});
+		ui.showModal(_('导入配置文件'), [
+			E('p', {}, _('选择单个 UTF-8 JSON 文件（最大 64 KiB）。载入后可检查名称和内容，点击“保存配置”才会校验并保存为草稿。')),
+			E('p', {}, _('同名配置不会被覆盖，请使用新的配置名称；导入不会切换当前连接。')),
+			fileInput, message, E('div', { 'class': 'right' }, [ cancel, ' ', load ])
+		]);
+	},
+
+	exportFile: function(name) {
+		return readProfile(name).then(function(data) {
+			if (!data.ok || !data.exists) throw new Error(data.error || _('配置不存在，请刷新列表。'));
+			if (typeof data.content !== 'string' || new TextEncoder().encode(data.content).length > 65536)
+				throw new Error(_('配置内容无效或超过 64 KiB，无法导出。'));
+			var url = URL.createObjectURL(new Blob([ data.content ], { type: 'application/json;charset=utf-8' }));
+			var link = E('a', { 'href': url, 'download': name + '.json', 'style': 'display:none' });
+			try { document.body.appendChild(link); link.click(); }
+			finally {
+				link.remove();
+				window.setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+			}
+		});
+	},
+
+	open: function(name, copy, onSaved, imported) {
+		var load = imported ? Promise.resolve({ ok: true, content: imported.content, revision: '' }) :
+			(name ? readProfile(name) : Promise.resolve({ ok: true, content: '', revision: '' }));
 		return load.then(function(data) {
 			if (!data.ok || (name && !data.exists)) throw new Error(data.error || _('配置不存在，请刷新列表。'));
 			var creating = !name || copy;
@@ -18,7 +81,7 @@ return L.Class.extend({
 			var nameInput = E('input', {
 				'class': 'cbi-input-text', 'type': 'text', 'aria-label': _('配置名称'),
 				'maxlength': 128, 'readonly': creating ? null : true,
-				'value': copy ? Array.from(name).slice(0, 32).join('') + '_copy' : (name || '')
+				'value': copy ? Array.from(name).slice(0, 32).join('') + '_copy' : (imported ? imported.name : (name || ''))
 			});
 			var editor = E('textarea', {
 				'class': 'cbi-input-textarea', 'rows': 22, 'wrap': 'off',
@@ -50,7 +113,7 @@ return L.Class.extend({
 					busy = false; save.disabled = close.disabled = editor.disabled = nameInput.disabled = false;
 				});
 			} }, _('保存配置'));
-			ui.showModal(creating ? _('新建配置') : _('编辑配置'), [
+			ui.showModal(imported ? _('导入配置') : (creating ? _('新建配置') : _('编辑配置')), [
 				E('p', {}, _('保存只更新配置库。关闭编辑器后，点击“应用所选配置”才会切换并重启客户端。')),
 				E('p', {}, _('JSON 内含设备私钥，只有配置管理权限可以读取。')),
 				E('label', {}, [ _('配置名称'), ' ', nameInput ]), editor, message,
@@ -105,6 +168,15 @@ return L.Class.extend({
 		};
 		var controls = E('div', {}, [
 			addButton(_('新建配置'), false, function() { return self.open(null, false, refresh); }),
+			addButton(_('导入文件'), false, function() { return self.importFile(refresh); }),
+			addButton(_('导出所选'), true, function() {
+				if (busy || !selected.value) return;
+				var name = selected.value;
+				busy = true; update(); note.textContent = _('正在读取已保存的配置…');
+				return self.exportFile(name).then(function() {
+					note.textContent = _('已请求下载：') + name + '.json。' + _('导出的是已保存草稿，可能包含未应用修改；文件含设备私钥，请妥善保管。');
+				}).catch(function(err) { note.textContent = err.message; }).finally(function() { busy = false; update(); });
+			}),
 			addButton(_('复制所选'), true, function() { return self.open(selected.value, true, refresh); }),
 			addButton(_('编辑所选'), true, function() { return self.open(selected.value, false, refresh); }),
 			addButton(_('删除所选'), true, function() {
@@ -148,6 +220,7 @@ return L.Class.extend({
 		var section = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('配置文件')), active,
 			E('p', {}, _('每份配置独立保存；同一时间只运行手动应用的那一份。')),
+			E('p', {}, _('导入仅创建草稿；导出所选配置的已保存草稿。JSON 文件包含设备私钥，请勿公开分享。')),
 			selected, controls, note
 		]);
 		update();

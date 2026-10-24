@@ -105,7 +105,7 @@ def main():
         parser.error("epoch must be nonnegative")
     revision = commit[:12] + ("-dirty" if dirty else "")
     package_version = "0.10.0_git" + str(epoch) + "-r8"
-    ui_version = "0.4.0-r2"
+    ui_version = "0.5.0-r1"
     env = dict(os.environ, GOOS="linux", GOARCH="arm64", CGO_ENABLED="0", GOTOOLCHAIN="go" + go_version)
     from datetime import datetime, timezone
     date = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
