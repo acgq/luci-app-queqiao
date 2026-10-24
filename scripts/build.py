@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-build a local Queqiao checkout and create unsigned OpenWrt APKv3s."""
+"""Cross-build Queqiao and create OpenWrt APKv3 and/or opkg IPK packages."""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,8 @@ from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import tarfile
+
+from ipk import write_ipk
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,10 +89,13 @@ def tar_payload(path, entries, epoch):
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--source", required=True, type=Path)
-    parser.add_argument("--apk-tool", required=True, help="Linux path to apk with mkpkg support")
+    parser.add_argument("--apk-tool", help="Linux path to apk with mkpkg support")
     parser.add_argument("--wsl", help="WSL distribution for Windows builds")
     parser.add_argument("--epoch", type=int, help="Fixed build timestamp; defaults to source commit time")
+    parser.add_argument("--format", choices=["apk", "ipk", "both"], default="apk")
     args = parser.parse_args()
+    if args.format in ("apk", "both") and not args.apk_tool:
+        parser.error("--apk-tool is required for APK output")
     source = args.source.resolve()
     output = ROOT / "dist"
     output.mkdir(exist_ok=True)
@@ -104,8 +109,8 @@ def main():
     if epoch < 0:
         parser.error("epoch must be nonnegative")
     revision = commit[:12] + ("-dirty" if dirty else "")
-    package_version = "0.10.0_git" + str(epoch) + "-r8"
-    ui_version = "0.5.1-r2"
+    package_version = "0.10.0_git" + str(epoch) + "-r9"
+    ui_version = "0.5.2-r1"
     env = dict(os.environ, GOOS="linux", GOARCH="arm64", CGO_ENABLED="0", GOTOOLCHAIN="go" + go_version)
     from datetime import datetime, timezone
     date = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -192,6 +197,12 @@ def main():
                 entries["scripts/" + script] = (path.read_bytes(), 0o755)
                 if script == "post-install":
                     entries["scripts/post-upgrade"] = (path.read_bytes(), 0o755)
+        if args.format in ("ipk", "both"):
+            ipk_path = write_ipk(output, name, entries, version, arch, dependencies, epoch)
+            packages.append(ipk_path)
+            print(ipk_path)
+        if args.format == "ipk":
+            continue
         files = sorted("/" + key.removeprefix("root/") for key in entries if key.startswith("root/"))
         entries[f"root/lib/apk/packages/{name}.list"] = (("\n".join(files) + f"\n/lib/apk/packages/{name}.list\n").encode(), 0o644)
         archive = output / (name + ".tar")

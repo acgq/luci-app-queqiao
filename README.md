@@ -1,7 +1,8 @@
 # Queqiao for OpenWrt
 
-Queqiao 的 OpenWrt APK 打包与 LuCI 管理页面，独立于传输核心仓库维护。
-目前针对 **OpenWrt / ImmortalWrt 25.12、aarch64_cortex-a53** 提供开发包。
+Queqiao 的 OpenWrt APK/IPK 打包与 LuCI 管理页面，独立于传输核心仓库维护。
+目前针对 **aarch64_cortex-a53** 提供主程序开发包，支持 APKv3 与 opkg IPK。
+已在 ImmortalWrt 25.12（APK）及 Kwrt 25.12（opkg）验证；LuCI 为 noarch/all。
 已在 Redmi AX6（stock layout）上完成安装及 SOCKS5 HTTPS 连通性验证。
 其他架构、旧版 opkg 固件、重启恢复和长期负载尚未验证。
 
@@ -23,16 +24,35 @@ Queqiao 的 OpenWrt APK 打包与 LuCI 管理页面，独立于传输核心仓�
 
 ## 安装
 
-本仓库的 [Releases](https://github.com/acgq/luci-app-queqiao/releases) 只提供 LuCI APK
-和校验文件；主程序 APK 由独立仓库构建。请先安装兼容的后端包：除了
+本仓库的 [Releases](https://github.com/acgq/luci-app-queqiao/releases) 提供 LuCI APK/IPK、
+ARM64 主程序 IPK 和校验文件；主程序 APK 仍由独立仓库构建。请先安装兼容的后端包：除了
 `queqiaod`，还需包含本仓库的 profile helper、procd/UCI 集成，并提供
 `queqiao-luci-api-v4` 能力标记。单独的可执行文件不能满足页面依赖。
 
 已有兼容后端时，只需安装页面包：
 
 ```sh
-apk add --allow-untrusted --no-network /tmp/luci-app-queqiao-0.5.1-r2.apk
+apk add --allow-untrusted --no-network /tmp/luci-app-queqiao-0.5.2-r1.apk
 ```
+
+### opkg / IPK 固件
+
+先用 `opkg print-architecture` 确认含 `aarch64_cortex-a53`。将主程序和 LuCI IPK
+复制到路由器 `/tmp`，核对校验和后安装实际文件名：
+
+```sh
+opkg install /tmp/queqiao_<version>_aarch64_cortex-a53.ipk \
+  /tmp/luci-app-queqiao_0.5.2-r1_all.ipk
+```
+
+已有兼容后端时只需升级 LuCI IPK。IPK 不能改扩展名转换成 APK；固件使用哪种
+包管理器就安装对应格式。旧固件、其他架构和不同 LuCI 版本仍需分别验证。
+主包的 conffiles 与 sysupgrade keep 规则保留私有配置；全新安装默认不启动。
+从旧系统备份迁移时只恢复 `/etc/config/queqiao` 与 `/etc/queqiao/`，排除锁文件和
+`.apk-new`；恢复后核对目录 0700、配置 0600，再启用服务。不要整包覆盖网络、
+防火墙、SSH 或其他组件配置，备份也不要公开上传。
+
+### APK 固件
 
 先检查设备架构为 `aarch64_cortex-a53`。将两个 APK 复制到路由器 `/tmp`，
 核对 `SHA256SUMS` 后安装对应的实际文件名：
@@ -204,12 +224,28 @@ LAN 能力随 `patches/100-lan-ingress.patch` 构建，默认回环行为保持�
 构建器先在私有输出副本中严格检查补丁，再通过 Go overlay 构建，记录补丁摘要；
 不会改写所选传输 checkout。补丁不改变 Queqiao 帧、ALPN 或网关认证，仍为协议 1。
 
-## 从源码构建 APK
+## 从源码构建 APK / IPK
 
 使用传输源码 `go.mod` 指定的 Go 工具链（当前 1.26.9）和 Python 3.10+。
 需要 Linux `apk mkpkg`（apk-tools 3.x，包含打包 applet）；可使用 Alpine
 官方 `apk-tools-static`。Windows 通过 WSL 调用该工具，Linux 可用 root 或
 fakeroot，确保包内文件属于 UID/GID 0。
+
+只构建 IPK 不需要 Linux apk-tools 或 WSL，使用本机 Python 即可打包：
+
+```sh
+python scripts/build.py --source ../queqiao --format ipk
+```
+
+IPK 使用 OpenWrt [ipkg-build](https://github.com/openwrt/openwrt/blob/main/scripts/ipkg-build)
+约定的 gzip-tar 容器，包含 `debian-binary`、`control.tar.gz` 和 `data.tar.gz`；固定
+UID/GID、文件模式、tar 时间和 gzip 头。主包声明 `queqiao-luci-api-v4`，页面通过
+opkg 的虚拟包依赖检查；包内不混入 APK 数据库文件。IPK 版本中的 `_git` 规范为
+`+git`，可执行文件内版本仍保留构建标识。
+
+`--format apk` 是兼容旧流程的默认值；`--format both` 同时生成四个包。只有 APK
+输出需要 `--apk-tool`、Linux root/fakeroot 或 Windows WSL。下面示例增加
+`--format both` 即可生成两种格式。
 
 Windows PowerShell 示例；所有路径换成自己的绝对路径：
 
@@ -224,15 +260,15 @@ Linux 示例：
 fakeroot python3 scripts/build.py --source ../queqiao --apk-tool /usr/bin/apk
 ```
 
-`dist/` 包含两个 APK、校验和、静态可执行文件、模块图及 `BUILDINFO.json`。
+`dist/` 包含所选格式的软件包、校验和、静态可执行文件、模块图及 `BUILDINFO.json`。
 默认构建时间取源提交时间，可用 `--epoch` 固定。构建记录源提交、工作区
 是否有修改、源码摘要、Go 版本、目标、模块文件摘要和二进制摘要；编译期间
 源码或 HEAD 变化会报错。源码应来自可信 checkout；未跟踪源码不应参与正式
-构建。相同源码、打包脚本、apk 工具和 epoch 才具有相同重现条件。
+构建。相同源码、Go/Python/zlib、打包脚本、apk 工具（APK）和 epoch 才具有相同重现条件。
 包内附带上游及依赖许可证。`dist/` 不提交 Git。
 
 上游 `scripts/validate_release.py` 验证六个平台的官方 tar/zip 发布集合，
-尚不识别本仓库的 OpenWrt APK，因此本开发包使用 `apk verify`、模拟安装、
+尚不识别本仓库的 OpenWrt APK/IPK，因此本开发包使用 APK 完整性/归档检查、模拟安装、
 实机安装和文件摘要进行验证，不能将其标为上游正式发布验证通过。
 
 ## OpenWrt SDK/feed
@@ -249,7 +285,7 @@ fakeroot python3 scripts/build.py --source ../queqiao --apk-tool /usr/bin/apk
 LuCI 使用原生 JavaScript view、UCI、有限方法的 rpcd 插件及最小 ACL。
 新增设置应同步更新启动脚本的取值校验，避免增加任意命令执行或私钥读取接口。
 
-只回滚软件包时安装保留的旧 APK；从手工部署迁移时，先停止服务、卸载两个包，
+只回滚软件包时安装保留的旧 APK/IPK；从手工部署迁移时，先停止服务、卸载两个包，
 再从路由器本地备份恢复旧程序和旧启动脚本，并恢复原来的启用状态。卸载不应
 删除 `/etc/queqiao/` 下的私有配置，但任何回滚前均应确认这些文件安全保留。
 降级到单配置版本前，先停止服务，使用 `queqiao-profile active-path` 确认实际
@@ -261,8 +297,8 @@ LuCI 使用原生 JavaScript view、UCI、有限方法的 rpcd 插件及最小 A
 
 ## Actions 构建
 
-在 **OpenWrt APK packages** 工作流手动填入 `acgq/queqiao` 的完整 40 位
+在 **OpenWrt APK and IPK packages** 工作流选择 `both` / `apk` / `ipk`，手动填入 `acgq/queqiao` 的完整 40 位
 提交 SHA。工作流从该提交构建，应用本仓库的 LAN 入口补丁，使用固定版本和
-SHA256 的 apk-tools 生成 `aarch64_cortex-a53` 核心包及 noarch LuCI 包。
-下载同次运行的 APK、SHA256SUMS、BUILDINFO.json 和模块记录，先核对校验和。
+SHA256 的 apk-tools（APK 输出）生成 `aarch64_cortex-a53` 核心包及 noarch/all LuCI 包。
+下载同次运行的 APK/IPK、SHA256SUMS、BUILDINFO.json 和模块记录，先核对校验和。
 这些仍是未签名的开发包，不会自动发布 Release 或安装到路由器。

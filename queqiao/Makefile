@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=queqiao
 PKG_VERSION:=0.10.0
-PKG_RELEASE:=8
+PKG_RELEASE:=9
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=Queqiao OpenWrt contributors
 
